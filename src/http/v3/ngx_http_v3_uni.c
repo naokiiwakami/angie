@@ -328,6 +328,7 @@ ngx_http_v3_get_uni_stream(ngx_connection_t *c, ngx_uint_t type)
     ngx_connection_t          *sc;
     ngx_http_v3_session_t     *h3c;
     ngx_http_v3_uni_stream_t  *us;
+    char                      *error_kind;
 
     h3c = ngx_http_v3_get_session(c);
 
@@ -357,6 +358,7 @@ ngx_http_v3_get_uni_stream(ngx_connection_t *c, ngx_uint_t type)
 
     sc = ngx_quic_open_stream(c, 0);
     if (sc == NULL) {
+        error_kind = "quic stream open error";
         goto failed;
     }
 
@@ -367,6 +369,7 @@ ngx_http_v3_get_uni_stream(ngx_connection_t *c, ngx_uint_t type)
 
     us = ngx_pcalloc(sc->pool, sizeof(ngx_http_v3_uni_stream_t));
     if (us == NULL) {
+        error_kind = "palloc error";
         goto failed;
     }
 
@@ -387,6 +390,7 @@ ngx_http_v3_get_uni_stream(ngx_connection_t *c, ngx_uint_t type)
     h3c->total_bytes += n;
 
     if (sc->send(sc, buf, n) != (ssize_t) n) {
+        error_kind = "failed to send stream type";
         goto failed;
     }
 
@@ -396,9 +400,19 @@ ngx_http_v3_get_uni_stream(ngx_connection_t *c, ngx_uint_t type)
 
 failed:
 
-    ngx_log_error(NGX_LOG_ERR, c->log, 0,
-                               h3c->client ? "failed to create client stream"
-                                           : "failed to create server stream");
+    if (h3c->goaway || c->close) {
+        // the peer may have disconnected at the same time for session
+        // idle timeout
+        ngx_log_error(NGX_LOG_INFO, c->log, 0,
+            h3c->client ? "failed to create client stream while closing h3 session; %s"
+                        : "failed to create server stream while closing h3 session; %s",
+            error_kind);
+    } else {
+        ngx_log_error(NGX_LOG_ERR, c->log, 0,
+            h3c->client ? "failed to create client stream; %s"
+                        : "failed to create server stream; %s",
+            error_kind);
+    }
 
     ngx_http_v3_finalize_connection(c, NGX_HTTP_V3_ERR_STREAM_CREATION_ERROR,
                                h3c->client ? "failed to create client stream"
